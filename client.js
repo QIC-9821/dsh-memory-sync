@@ -145,6 +145,32 @@ window.__ModuleLoader__.load({
       }
     }
 
+    const TOOL_REASON_LABELS = {
+      off: '已关闭',
+      always: '始终注册',
+      'no-repo-path': '未配置记忆目录',
+      wake: '唤醒窗口内',
+      running: '正在同步',
+      'no-last-run': '还没同步过',
+      'last-failed': '上次同步失败',
+      healthy: '上次同步成功',
+      'register-failed': '注册失败',
+    }
+
+    const SECRET_SOURCE_LABELS = {
+      config: '配置文件 memSecret',
+      env: '环境变量',
+      file: '密钥文件',
+      generated: '自动生成（文件）',
+      none: '未设置',
+    }
+
+    const REMOTE_MODE_LABELS = {
+      off: '关闭（局域网直连）',
+      tailscale: 'Tailscale（异地）',
+      ssh: 'SSH 反向隧道',
+    }
+
     function phaseLine(phase) {
       const bits = [phase.name, phase.ok ? 'ok' : 'FAILED']
       if (phase.ms !== undefined) bits.push(`${phase.ms}ms`)
@@ -170,6 +196,10 @@ window.__ModuleLoader__.load({
       const [preview, setPreview] = useState(null)
       const [pendingImport, setPendingImport] = useState(null)
       const [clearSecret, setClearSecret] = useState(false)
+      const [pairCode, setPairCode] = useState(null)
+      const [pairUrl, setPairUrl] = useState('')
+      const [pairInput, setPairInput] = useState('')
+      const [includeBackups, setIncludeBackups] = useState(false)
 
       const load = useCallback(async () => {
         try {
@@ -195,6 +225,14 @@ window.__ModuleLoader__.load({
       const set = (key, next) => setDraft((current) => ({ ...current, [key]: next }))
       const dirtyOf = (key) => draft[key] !== undefined
 
+      const toolInfo = data?.tools || {}
+      const toolMode = value('toolsMode') || toolInfo.mode || 'auto'
+      const toolScope = value('toolsScope') || toolInfo.scope || 'core'
+      const toolReason = TOOL_REASON_LABELS[toolInfo.reason] || toolInfo.reason || ''
+      const secretInfo = data?.secret || {}
+      const remoteInfo = data?.remote || {}
+      const pairingInfo = data?.pairing || {}
+
       async function run(label, fn) {
         setBusy(label)
         setError('')
@@ -211,12 +249,15 @@ window.__ModuleLoader__.load({
       async function save() {
         const patch = { ...draft }
         if (patch.memSecret === '') delete patch.memSecret
+        const toolChanged = 'toolsMode' in patch || 'toolsScope' in patch
         await run('save', async () => {
           const next = await post('config', { patch, clearSecret })
           setData(next)
           setDraft({})
           setClearSecret(false)
-          setNote('已保存到 settings.json，并立即生效。')
+          setNote(toolChanged
+            ? '已保存，工具注册表已更新（下一轮对话生效）。'
+            : '已保存到 settings.json，并立即生效。')
         })
       }
 
@@ -236,6 +277,63 @@ window.__ModuleLoader__.load({
           const next = await post('sync', { direction })
           setResult(next.result)
           setData((current) => ({ ...current, status: next.status }))
+        })
+      }
+
+      async function wakeTools() {
+        await run('wake', async () => {
+          const next = await post('tools/wake', { minutes: 10 })
+          setData((current) => ({ ...current, tools: next.tools || current?.tools }))
+          setNote(`已唤醒 memory_sync 工具，10 分钟内后续对话可见（${next.until ? clock(next.until) : ''}）。`)
+        })
+      }
+
+      async function migrateSecret() {
+        const target = String(value('secretFile') || '').trim()
+        if (!target) {
+          setNote('先填写新的密钥文件路径，再点迁移。')
+          return
+        }
+        await run('migrate-secret', async () => {
+          const next = await post('secret/migrate', { secretFile: target })
+          setData(next.state)
+          setNote(next.warning || `密钥已迁移到 ${next.file || target}；旧值未删除，确认无误后可手动清理。`)
+        })
+      }
+
+      async function newPairCode() {
+        await run('pair-new', async () => {
+          const next = await post('pair/new')
+          setPairCode(next)
+          setNote(`配对码 ${next.code}，${clock(next.expiresAt)} 前有效，只能使用一次。`)
+        })
+      }
+
+      async function acceptPair() {
+        await run('pair-accept', async () => {
+          const next = await post('pair/accept', { url: pairUrl, code: pairInput })
+          setData(next.state)
+          setPairCode(null)
+          setPairInput('')
+          setNote(`已配对：${next.paired?.name || next.paired?.machine || '对端'} · 指纹 ${next.paired?.fingerprint || '-'}`)
+        })
+      }
+
+      async function refreshRemote() {
+        await run('remote-refresh', async () => {
+          const next = await post('remote/refresh')
+          setData(next.state)
+          setNote(next.remote?.tunnel?.state ? `远程状态：${next.remote.tunnel.state}` : '远程状态已刷新。')
+        })
+      }
+
+      async function cleanupLocal() {
+        if (!window.confirm('删除本机插件数据（设置、密钥、日志、配对记录）？记忆目录不会被删除。')) return
+        await run('cleanup', async () => {
+          const next = await post('cleanup', { confirm: true, includeBackups })
+          setData(next.state)
+          setDraft({})
+          setNote(`已删除 ${next.removed?.length || 0} 项本机数据${next.failed?.length ? `，${next.failed.length} 项失败` : ''}。重启插件后恢复默认。`)
         })
       }
 
@@ -379,6 +477,47 @@ window.__ModuleLoader__.load({
           ]) : null,
         ]),
 
+        h(Card, { key: 'tools', title: '工具（省 token）' }, [
+          h(Field, {
+            key: 'mode',
+            first: true,
+            label: 'memory_sync 什么时候注册',
+            help: 'agent 每轮都要读工具表。不用时让工具从表里消失，比删注册表更省：模型根本看不到它。',
+          }, h(Select, {
+            value: toolMode,
+            options: [
+              ['auto', '自动：需要时才出现（推荐，最省）'],
+              ['always', '总是注册：每轮都占工具位'],
+              ['off', '关闭：完全不注册'],
+            ],
+            onChange: (next) => set('toolsMode', next),
+          })),
+          h(Toggle, {
+            key: 'scope',
+            label: '注册完整操作（快照 / 离线）',
+            desc: '不勾=只给 run/status，工具表最短；勾上才给 list/restore/export/import。',
+            checked: toolScope === 'full',
+            onChange: (next) => set('toolsScope', next ? 'full' : 'core'),
+            dirty: dirtyOf('toolsScope'),
+          }),
+          h('div', { key: 'now', style: { ...MUTED, marginTop: 8 } }, [
+            h('div', { key: 'line1' }, `当前：${toolInfo.registered ? '已注册' : '未注册'} · ${toolInfo.visible ? '下一轮可见' : '下一轮隐藏'}${toolReason ? ` · ${toolReason}` : ''}`),
+            h('div', { key: 'line2' }, `工具表约 ${toolInfo.estimateChars || 0} 字符 ≈ ${toolInfo.estimateTokens || 0} tokens · 当前范围 ${toolInfo.scope || toolScope}`),
+            toolInfo.wakeUntil ? h('div', { key: 'line3' }, `唤醒至 ${clock(toolInfo.wakeUntil)}`) : null,
+          ]),
+          h('div', { key: 'buttons', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } }, [
+            h('button', {
+              key: 'wake',
+              style: BUTTON,
+              disabled: Boolean(busy) || toolMode !== 'auto' || !value('repoPath'),
+              onClick: () => void wakeTools(),
+            }, busy === 'wake' ? '唤醒中…' : '唤醒 agent 工具 10 分钟'),
+            h('span', { key: 'hint', style: MUTED }, toolMode === 'auto'
+              ? '健康时整条工具从工具表消失；上次失败、正在同步或唤醒窗口内会重新出现。'
+              : toolMode === 'off' ? '完全不注册，agent 无法主动同步。' : '每轮都注册，token 占用最高。'),
+          ]),
+        ]),
+
         h(Card, { key: 'transport', title: '传输方式' }, [
           h(Field, { key: 't', first: true, label: '怎么连对端' }, h(Select, {
             value: value('transport'),
@@ -397,6 +536,40 @@ window.__ModuleLoader__.load({
             ],
             onChange: setRole,
           })),
+        ]),
+
+        h(Card, { key: 'remote', title: '远程访问（异地）' }, [
+          h(Field, { key: 'mode', first: true, label: '怎么让对端找到本机', help: 'Tailscale 适合平板/家里 NAS；SSH 反向隧道需要一台有公网 IP 的跳板机。' }, h(Select, {
+            value: value('remoteMode'),
+            options: Object.entries(REMOTE_MODE_LABELS),
+            onChange: (v) => set('remoteMode', v),
+          })),
+          value('remoteMode') === 'tailscale' ? h('div', { key: 'ts', style: { marginTop: 8 } }, [
+            h('div', { key: 'rows', style: { fontSize: 13 } }, [
+              h('div', { key: 'a', style: ROW }, [h('span', { key: 'k' }, 'Tailscale'), h('span', { key: 'v' }, remoteInfo.tailscale?.installed ? (remoteInfo.tailscale.online ? '在线' : '离线') : '未安装')]),
+              h('div', { key: 'b', style: ROW }, [h('span', { key: 'k' }, '地址'), h('span', { key: 'v' }, remoteInfo.tailscale?.ipv4 || remoteInfo.effectiveHost || '—')]),
+              h('div', { key: 'c', style: ROW }, [h('span', { key: 'k' }, '远程 URL'), h('span', { key: 'v' }, remoteInfo.remoteUrl || '—')]),
+              h('div', { key: 'd', style: ROW }, [h('span', { key: 'k' }, 'WARP'), h('span', { key: 'v' }, remoteInfo.warp?.installed
+                ? `${remoteInfo.warp.mode || '未知模式'}${remoteInfo.warp.changed ? ` · 已切到 DoH（原 ${remoteInfo.warp.previousMode || 'tunnel'}）` : ''}`
+                : '未安装')]),
+            ]),
+            h(Toggle, { key: 'warp', label: '与 WARP 共存', desc: '把 WARP 切到 DoH，避免抢 Tailscale 路由。', checked: Boolean(value('warpCoexist')), onChange: (v) => set('warpCoexist', v), dirty: dirtyOf('warpCoexist') }),
+          ]) : null,
+          value('remoteMode') === 'ssh' ? h('div', { key: 'ssh', style: { marginTop: 8 } }, [
+            h(Toggle, { key: 'tunnel', label: '启动 SSH 反向隧道', desc: '在跳板机上监听 tunnelRemotePort，把连接送回本机快照服务。', checked: Boolean(value('tunnelEnabled')), onChange: (v) => set('tunnelEnabled', v), dirty: dirtyOf('tunnelEnabled') }),
+            h('div', { key: 'grid', style: GRID }, [
+              h(Field, { key: 'host', label: '跳板机地址' }, h(Text, { value: value('sshHost'), placeholder: '114.55.146.70', onChange: (v) => set('sshHost', v) })),
+              h(Field, { key: 'user', label: '跳板机用户' }, h(Text, { value: value('sshUser'), placeholder: 'root', onChange: (v) => set('sshUser', v) })),
+              h(Field, { key: 'key', label: '私钥路径' }, h(Text, { value: value('sshKeyPath'), placeholder: 'C:/Users/.../.ssh/id_ed25519', onChange: (v) => set('sshKeyPath', v) })),
+              h(Field, { key: 'rport', label: '跳板机监听端口' }, h(Text, { value: value('tunnelRemotePort'), type: 'number', onChange: (v) => set('tunnelRemotePort', v) })),
+              h(Field, { key: 'lport', label: '本机目标端口（0=listenPort）' }, h(Text, { value: value('tunnelLocalPort'), type: 'number', onChange: (v) => set('tunnelLocalPort', v) })),
+            ]),
+            h('div', { key: 'state', style: { ...MUTED, marginTop: 8 } }, `隧道状态：${remoteInfo.tunnel?.state || 'stopped'}${remoteInfo.tunnel?.error ? ` · ${remoteInfo.tunnel.error}` : ''}`),
+          ]) : null,
+          h('div', { key: 'actions', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } }, [
+            h('button', { key: 'refresh', style: BUTTON, disabled: Boolean(busy), onClick: () => void refreshRemote() }, busy === 'remote-refresh' ? '刷新中…' : '刷新远程状态'),
+          ]),
+          h('div', { key: 'tip', style: { ...MUTED, marginTop: 8 } }, 'Tailscale 在线时会自动把监听地址换成 tailnet IPv4；离线时回退到 listenHost。SSH 隧道只解决“跳板机 → 本机”一个方向。'),
         ]),
 
         value('transport') === 'http'
@@ -424,6 +597,33 @@ window.__ModuleLoader__.load({
               h('div', { key: 'tip', style: { ...MUTED, marginTop: 8 } }, 'PC 防火墙要放行这个端口；两端不在同一网络时改用下面的离线快照。'),
             ])
           : null,
+
+        h(Card, { key: 'secret', title: '密钥与配对' }, [
+          h('div', { key: 'rows', style: { fontSize: 13 } }, [
+            h('div', { key: 'a', style: ROW }, [h('span', { key: 'k' }, '密钥来源'), h('span', { key: 'v' }, SECRET_SOURCE_LABELS[secretInfo.source] || secretInfo.source || '未设置')]),
+            h('div', { key: 'b', style: ROW }, [h('span', { key: 'k' }, '指纹'), h('span', { key: 'v' }, secretInfo.fingerprint || '—')]),
+            h('div', { key: 'c', style: ROW }, [h('span', { key: 'k' }, '密钥文件'), h('span', { key: 'v', style: { wordBreak: 'break-all', textAlign: 'right' } }, secretInfo.file || '—')]),
+          ]),
+          h(Field, { key: 'file', label: '新密钥文件路径', help: '留空=stateDir/secret；支持绝对路径、~ 或相对 stateDir。填目录会自动变成目录/secret。' }, h(Text, { value: value('secretFile'), placeholder: 'C:/Users/QIC/.dsh/memory-sync/secret', onChange: (v) => set('secretFile', v) })),
+          h('div', { key: 'migrate', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } }, [
+            h('button', { key: 'm', style: BUTTON, disabled: Boolean(busy), onClick: () => void migrateSecret() }, busy === 'migrate-secret' ? '迁移中…' : '把当前密钥迁移到该路径'),
+          ]),
+          h('div', { key: 'pairhead', style: { fontWeight: 600, marginTop: 14 } }, '配对码'),
+          h('div', { key: 'pairhint', style: MUTED }, '一台生成 6 位码，另一台填地址和码加入；码 5 分钟内有效、只能使用一次。配对会互换共享密钥。'),
+          h('div', { key: 'pairrow', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } }, [
+            h('button', { key: 'new', style: PRIMARY, disabled: Boolean(busy), onClick: () => void newPairCode() }, busy === 'pair-new' ? '生成中…' : '生成配对码'),
+            pairCode ? h('span', { key: 'show', style: { alignSelf: 'center', fontWeight: 700, letterSpacing: 2 } }, `${pairCode.code} · ${clock(pairCode.expiresAt)} 前`) : null,
+          ]),
+          h('div', { key: 'pairgrid', style: { ...GRID, marginTop: 8 } }, [
+            h(Field, { key: 'url', label: '对端地址（加入方填）' }, h(Text, { value: pairUrl, placeholder: 'http://100.x.x.x:18792', onChange: setPairUrl })),
+            h(Field, { key: 'code', label: '配对码（加入方填）' }, h(Text, { value: pairInput, placeholder: '6 位数字', onChange: setPairInput })),
+          ]),
+          h('div', { key: 'accept', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 } }, [
+            h('button', { key: 'go', style: BUTTON, disabled: Boolean(busy) || !pairUrl || !pairInput, onClick: () => void acceptPair() }, busy === 'pair-accept' ? '配对中…' : '加入配对'),
+            h('span', { key: 'count', style: MUTED }, `已记录配对：${pairingInfo.pairings || 0} 台${pairingInfo.lockedUntil ? ` · 锁定至 ${clock(pairingInfo.lockedUntil)}` : ''}`),
+          ]),
+          h('div', { key: 'tip', style: { ...MUTED, marginTop: 8 } }, '密钥优先级：配置值 > 环境变量 > 密钥文件 > 自动生成。配对码走 HTTP，建议只在局域网 / Tailscale / SSH 隧道内使用。'),
+        ]),
 
         h(Card, { key: 'manual', title: '使用说明' }, [
           h('div', { key: 'list', style: { fontSize: 13, lineHeight: 1.75 } }, [
@@ -530,6 +730,13 @@ window.__ModuleLoader__.load({
           h('div', { key: 'flags', style: { marginTop: 8 } }, [
             h(Toggle, { key: 'enabled', label: '总开关', desc: '关掉后不启动/不跑定时；手动同步仍可用。', checked: Boolean(value('enabled')), onChange: (v) => set('enabled', v), dirty: dirtyOf('enabled') }),
             h(Toggle, { key: 'notify', label: '失败弹窗', desc: '同步失败时弹系统窗口提醒。', checked: Boolean(value('notifyOnFailure')), onChange: (v) => set('notifyOnFailure', v), dirty: dirtyOf('notifyOnFailure') }),
+            h(Toggle, { key: 'purge', label: '卸载时删除本机数据（实验性）', desc: 'DSH 没有公开卸载钩子，只有在 profile 里已经找不到本插件时才会尝试清理。', checked: Boolean(value('purgeOnUninstall')), onChange: (v) => set('purgeOnUninstall', v), dirty: dirtyOf('purgeOnUninstall') }),
+          ]),
+          h('div', { key: 'cleanup', style: { marginTop: 14, paddingTop: 12, borderTop: '1px dashed var(--dsh-border, rgba(127,127,127,.25))' } }, [
+            h('div', { key: 'h', style: { fontWeight: 600 } }, '删除本机数据'),
+            h('div', { key: 'd', style: MUTED }, '删除设置、密钥文件、日志、上次运行记录、配对记录和锁；默认保留快照/导出和记忆目录。'),
+            h(Toggle, { key: 'backups', label: '连快照和导出一起删', desc: '勾选后 snapshots/ 与 exports/ 也会删除；记忆目录永远不删。', checked: includeBackups, onChange: setIncludeBackups }),
+            h('button', { key: 'go', style: BUTTON, disabled: Boolean(busy), onClick: () => void cleanupLocal() }, busy === 'cleanup' ? '删除中…' : '删除本机插件数据'),
           ]),
         ]),
 

@@ -4,6 +4,9 @@
   "peerUrl": "http://192.168.137.1:18792",
   "machine": "tablet",
   "memSecret": "REPLACE_WITH_THE_SAME_SECRET_AS_PC",
+  "secretFile": "",
+  "secretEnv": "DSH_MEM_SECRET",
+  "purgeOnUninstall": false,
   "serve": true,
   "autoApply": true,
   "enabled": true,
@@ -11,6 +14,8 @@
   "intervalSendMinutes": 30,
   "conflict": "local",
   "replyOnReceive": true,
+  "toolsMode": "auto",
+  "toolsScope": "core",
   "keepSnapshots": 5,
   "maxSnapshotMB": 100
 }

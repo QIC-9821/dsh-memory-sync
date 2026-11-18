@@ -55,13 +55,13 @@ function cfgFor(root, url, overrides = {}) {
   }
 }
 
-test('ping reports protocol v3 and the read-only rules', async () => {
+test('ping reports protocol v4 and the read-only rules', async () => {
   const root = mkdtempSync(join(tmpdir(), 'memsync-pc-'))
   const { hub, url } = await startHub(root)
   try {
     const response = await callPeer(url, '/mem/ping')
     const doc = await response.json()
-    assert.equal(doc.version, 3)
+    assert.equal(doc.version, 4)
     assert.equal(doc.rules.conflict, 'peer')
   } finally {
     await hub.close()

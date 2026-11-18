@@ -60,3 +60,19 @@ test('new rule keys normalize with sane defaults', () => {
   assert.equal(cfg.replyOnReceive, true)
   assert.equal(cfg.peerPort, 22)
 })
+
+test('tool registration keys default, persist and reject invalid enums', () => {
+  const env = { DSH_HOME: home() }
+  const store = createConfigStore({}, env)
+  assert.equal(store.current().toolsMode, 'auto')
+  assert.equal(store.current().toolsScope, 'core')
+
+  store.save({ toolsMode: 'off', toolsScope: 'full' })
+  assert.equal(store.current().toolsMode, 'off')
+  assert.equal(store.current().toolsScope, 'full')
+  assert.ok(store.info().overrides.includes('toolsMode'))
+
+  store.save({ toolsMode: 'sometimes', toolsScope: 'everything' })
+  assert.equal(store.current().toolsMode, 'off')
+  assert.equal(store.current().toolsScope, 'full')
+})

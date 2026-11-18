@@ -17,6 +17,8 @@ English: [README.en.md](README.en.md) · 简短说明书: [MANUAL.md](MANUAL.md)
 | 双方插件 · 离线快照 | 完全不在同一网络 | 导出 `.json.gz`，拷到另一端导入；先预览再合并 |
 | 单方插件 · SSH | 只有一端装插件 | 本机 SSH 登录对端执行同步脚本；对端只需可写记忆目录 + 裸仓/脚本 |
 
+不在同一网络时，把 `remoteMode` 设为 `tailscale`（绑定 Tailscale 地址）或 `ssh`（SSH 反向隧道）；见下面「远程访问」。
+
 ## 安装
 
 ```bash
@@ -29,13 +31,16 @@ dsh plugin add dsh-memory-sync
 "dsh-memory-sync": "link:D:/dsh-plugins/dsh-memory-sync"
 ```
 
-平板装自包含 zip：`dsh-memory-sync-0.3.0-tablet.zip`（根目录有 `package.json`、无 BOM、已把 schemastery 打进 `dist/index.js`）。
+平板装自包含 zip（`dist/dsh-memory-sync-0.3.0-tablet.zip` 是当前已构建的版本；0.4.0 代码尚未重新打包，需要时跑 `scripts/build-tablet.mjs`）。
 
 ## 设置页
 
 ### 电脑：设置 → 记忆同步
 
 - 测试连接 / 立即双向同步 / 仅推送 / 仅拉取
+- 工具（省 token）：`auto` / `always` / `off`，以及 `core` / `full` 两档
+- 密钥与配对：来源 / 指纹 / 密钥文件、迁移、生成配对码、用对端地址+码加入
+- 远程访问：Tailscale / SSH 反向隧道，以及隧道状态
 - 双方插件直连、离线快照、SSH 三段式
 - 自定义同步规则
 - 日志、快照列表与恢复
@@ -67,12 +72,15 @@ dsh plugin add dsh-memory-sync
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `repoPath` | `$DSH_HOME/memories` | 记忆目录 |
+| `toolsMode` / `toolsScope` | `auto` / `core` | agent 工具怎么注册、注册多少，见下面「工具与 token」 |
 | `remote` / `branch` | `cloud` / `main` | SSH/git 地址与分支 |
 | `enabled` | `true` | 总开关（不启动/不跑定时；手动仍可用） |
 | `startupGraceSec` | `300` | 启动后多少秒内挂载算一次启动 |
 | `transport` | `git` | `http` 或 `git` |
 | `peerUrl` | 空 | 对端快照地址，如 `http://192.168.137.50:18792` |
-| `memSecret` | 空 | 两端一致的共享密钥 |
+| `memSecret` | 空 | 两端一致的共享密钥；最高优先级，设置页不回显 |
+| `secretFile` / `secretEnv` | 空 / `DSH_MEM_SECRET` | 密钥文件（空=stateDir/secret）与环境变量名；优先级低于 `memSecret`、高于文件 |
+| `peerName` / `peerPlatform` / `peerPairedAt` / `peerFingerprint` | 空 | 配对记录，由配对流程写入 |
 | `machine` / `peerMachine` | 主机名 / 空 | 本机/对端名称 |
 | `serve` | `true` | 是否开快照服务 |
 | `listenHost` / `listenPort` | `0.0.0.0` / `18792` | 快照服务地址与端口 |
@@ -82,8 +90,28 @@ dsh plugin add dsh-memory-sync
 | `peerKeyPath` / `peerCommand` / `peerEnvName` | 空 / `/usr/local/bin/dsh-mem-sync` / `cloud` | SSH 模式密钥、对端脚本、环境名 |
 | `retryDelaySec` / `healIntervalSec` | `60` / `600` | 失败重试/自愈间隔 |
 | `intervalSendMinutes` / `conflict` / `replyOnReceive` | `0` / `peer` / `false` | 上面的自定义规则 |
+| `remoteMode` / `warpCoexist` | `off` / `true` | `off`=局域网；`tailscale`=绑定 Tailscale 地址；`ssh`=SSH 反向隧道；WARP 共存=Tailscale 模式期间把 WARP 切到 DoH，离开时恢复原模式 |
+| `tunnelEnabled` / `sshHost` / `sshUser` / `sshKeyPath` | `false` / 空 | SSH 反向隧道开关与跳板机 |
+| `tunnelRemotePort` / `tunnelLocalPort` | `18792` / `0` | 跳板机监听端口 / 本机目标端口（0=listenPort） |
+| `purgeOnUninstall` | `false` | 实验性：卸载且 profile 已无本插件时清本机数据 |
 
-状态、日志、设置、快照都在 `$DSH_HOME/memory-sync/`：`last-run.json`、`sync.log`、`settings.json`、`snapshots/`、`exports/`。
+状态、日志、设置、快照都在 `$DSH_HOME/memory-sync/`：`last-run.json`、`sync.log`、`settings.json`、`secret`、`pairings.json`、`snapshots/`、`exports/`。
+
+## 密钥与配对
+
+- 密钥优先级：`memSecret`（profile/设置页显式值）> `secretEnv` 环境变量 > `secretFile` > 自动生成。自动生成只在 `serve=true` 且前三种都没有时发生，内容为 32 字节 hex。
+- `secretFile` 支持绝对路径、`~` 和相对 `stateDir`；填目录会自动接 `/secret`。
+- 设置页只显示来源（config/env/file/generated）和 SHA-256 前 8 位指纹，不回显密钥；`/mem/ping` 也只带指纹。
+- 「迁移密钥」把当前密钥写到新文件（`POST /memory-sync/api/secret/migrate`）。来源是 config/env 时会把同一密钥复制到文件，并提示“当前仍以配置/环境变量为准”；删除那个来源并重载后才会改用文件。密钥路径本身用底部「保存」按钮即可单独保存。
+- 配对：一端点「生成配对码」，另一端填对端地址和 6 位码点「加入」。码 300 秒有效、只能用一次；同一 IP 连错 5 次锁 10 分钟。配对成功后两端使用同一密钥，并记录对端名称/平台/指纹。
+- 配对会把密钥经 HTTP 返回给持码方，只应在局域网、Tailscale 或 SSH 隧道里使用。
+
+## 远程访问
+
+- `remoteMode=off`：只监听 `listenHost` / `listenPort`，适合同一 Wi-Fi/热点。
+- `remoteMode=tailscale`：检测到 Tailscale 在线时，把监听地址换成 tailnet IPv4，设置页显示 `remoteUrl`；对端填这个地址即可。Tailscale 离线时回退到 `listenHost`。
+- `remoteMode=ssh` + `tunnelEnabled=true`：在本机起 `ssh -N -R 127.0.0.1:<tunnelRemotePort>:127.0.0.1:<localPort> user@sshHost`，由跳板机把连接转回来。断线按 5/10/30/60 秒退避重试；端口占用只记录错误，不自动杀进程。适合有一台公网 SSH 机器、但两端不在同一局域网的场景。
+- 这两种都不改 `memory_sync` 工具 schema，不影响省 token。
 
 ## 工作方式
 
@@ -93,26 +121,44 @@ dsh plugin add dsh-memory-sync
 - 合并规则：缺失文件补上；相同跳过；`conflict=local` 时本机较新不覆盖，`conflict=peer` 时对端覆盖；每日日志短的不覆盖长的；不删除；覆盖前写 `.bak-snapshot`。
 - 回发：只在本轮真的写入且请求未带 `x-mem-no-reply: 1` 时回发一次，回发本身带 no-reply，避免循环。
 
-## 工具
+## 工具与 token
 
-`memory_sync`：
+`memory_sync` 有两档，默认只带最常用的两个动作：
 
-- `{"action":"run","direction":"both|push|pull"}`：立刻同步。
-- `{"action":"status"}`：上次结果、传输、角色、规则、定时、对端。
-- `{"action":"list"}`：本地/对端快照。
-- `{"action":"restore","snapshot":"<id>"}`：恢复快照。
-- `{"action":"export","path":"..."}`：导出离线快照。
-- `{"action":"import","path":"...","dryRun":true}`：预览/导入离线快照。
+- `core`（默认）：`{"action":"run","direction":"both|push|pull"}`、`{"action":"status"}`。
+- `full`：额外有 `list`、`restore`、`export`、`import`（含 `snapshot` / `path` / `dryRun`）。
+
+`toolsMode` 决定它什么时候出现在上下文里：
+
+| 值 | 行为 |
+| --- | --- |
+| `auto`（默认） | 没配 `repoPath` 不注册；上次同步成功且空闲时隐藏（声明和调用一起消失）；失败/未知、正在同步、或唤醒窗口内重新出现 |
+| `always` | 每轮都注册，适合经常手动调工具的机器 |
+| `off` | 完全不注册；仍可用设置页和脚本 |
+
+省 token 的三个层次，从省到费：
+
+| 场景 | 每步工具声明 | 备注 |
+| --- | --- | --- |
+| `auto` + `core`，上次同步成功 | 0 | 最省；工具不出现在声明里 |
+| `auto` + `core`，失败/唤醒/同步中 | ≈521 字符（≈145 tokens） | 处理完自动缩回去 |
+| `always` + `core` | ≈521 字符（≈145 tokens） | 旧版是 1635 字符（≈450 tokens） |
+| `always` + `full` | ≈989 字符（≈275 tokens） | 含快照/离线动作 |
+| 调用 `status` 的输出 | ≈110–150 字符 | 旧版 799–1109 字符 |
+
+设置页的「工具（省 token）」卡片会实时显示当前是否注册、为什么可见，以及估算字符/token；需要临时让 agent 用一次时点「唤醒 agent 工具 10 分钟」（对应 `POST /memory-sync/api/tools/wake`，可传 1–120 分钟）。`auto` 下的可见性在**用户回合开始时**冻结，所以不会在一轮对话中途消失，也不会让 prompt 缓存反复失效。
 
 ## 设置 API
 
-`/memory-sync/api/state|config|reset|sync|test|logs|snapshots|restore|export|import`，只允许本机/同源请求；state/config 不回显 `memSecret`。
+`/memory-sync/api/state|config|reset|sync|test|logs|snapshots|restore|export|import|tools/wake|secret/migrate|pair/new|pair/accept|pairings|pair/clear|remote/refresh|cleanup`，只允许本机/同源请求；state/config 不回显 `memSecret`（只给来源和指纹）。
 
 ## 安全
 
-- 设置 API 只允许本机/同源；密钥不回显。
+- 设置 API 只允许本机/同源；密钥与配对码不回显、不写日志。
 - 共享密钥等同写权限；快照是明文 gzip，不要放密码。
-- 覆盖前自动备份；不删除文件。
+- 配对接口免鉴权但必须出示 6 位码，且码单次、短有效期、按 IP 限错；仍只建议在可信网络使用。
+- 卸载插件默认**不会**删数据；要清本机数据用设置页「删除本机数据」，或打开 `purgeOnUninstall`（实验性）。
+- 覆盖前自动备份；不删除记忆文件。
 - 安全漏洞请走 [SECURITY.md](SECURITY.md)，不要开公开 issue。
 
 ## 开发
