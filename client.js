@@ -232,6 +232,7 @@ window.__ModuleLoader__.load({
       const secretInfo = data?.secret || {}
       const remoteInfo = data?.remote || {}
       const pairingInfo = data?.pairing || {}
+      const janitorInfo = data?.janitor || {}
 
       async function run(label, fn) {
         setBusy(label)
@@ -416,6 +417,18 @@ window.__ModuleLoader__.load({
           setPreview(null)
           setPendingImport(null)
           await load()
+        })
+      }
+
+      async function runJanitorJob(dryRun) {
+        await run(dryRun ? 'janitor-preview' : 'janitor-run', async () => {
+          const next = await post('janitor/run', { dryRun })
+          const info = next.janitor || {}
+          setData((current) => ({ ...current, janitor: info }))
+          const report = next.result || {}
+          setNote(
+            `${report.dryRun ? '预览' : '整理完成'}：扫描 ${report.files || 0} 个文件，归档 ${report.archived || 0} 条、删除 ${report.purged || 0} 条、跳过 ${report.skipped || 0} 条${report.errors?.length ? `，${report.errors.length} 个错误` : ''}。`,
+          )
         })
       }
 
@@ -659,6 +672,37 @@ window.__ModuleLoader__.load({
           })),
           h(Toggle, { key: 'reply', label: '收到对端同步后回发快照', desc: '只在本次真的写入文件时回发一次，并带 no-reply 防循环。', checked: Boolean(value('replyOnReceive')), onChange: (v) => set('replyOnReceive', v), dirty: dirtyOf('replyOnReceive') }),
           h('div', { key: 'rulesnow', style: { ...MUTED, marginTop: 6 } }, `当前生效：启动=${rules.runOnStartup ? '开' : '关'} · 定时=${rules.intervalSendMinutes || 0} 分钟 · 冲突=${rules.conflict || 'peer'} · 回发=${rules.replyOnReceive ? '开' : '关'}`),
+        ]),
+
+        h(Card, { key: 'janitor', title: '记忆归档与清理' }, [
+          h('div', { key: 'desc', style: { ...MUTED, lineHeight: 1.6 } }, '把旧条目从主记忆移到 *-archive.md，归档再按天数/条数清理。归档和删除都可逆：写入前会自动备份成 *.bak-janitor-*。'),
+          h(Toggle, { key: 'enabled', label: '定期自动整理', desc: '关闭时只能手动点下面的按钮。', checked: Boolean(value('janitorEnabled')), onChange: (v) => set('janitorEnabled', v), dirty: dirtyOf('janitorEnabled') }),
+          h(Toggle, { key: 'syncAfter', label: '整理后自动推送快照', desc: '避免平板带着旧条目同步回来把已删内容写回。', checked: Boolean(value('janitorSyncAfter')), onChange: (v) => set('janitorSyncAfter', v), dirty: dirtyOf('janitorSyncAfter') }),
+          h('div', { key: 'numbers', style: GRID }, [
+            h(Field, { key: 'archive', first: true, label: '主记忆超过多少天归档' }, h(Text, { value: value('archiveAfterDays'), type: 'number', onChange: (v) => set('archiveAfterDays', v) })),
+            h(Field, { key: 'purge', label: '归档超过多少天删除' }, h(Text, { value: value('purgeAfterDays'), type: 'number', onChange: (v) => set('purgeAfterDays', v) })),
+            h(Field, { key: 'keep', label: '归档最多保留条数（0=不限）' }, h(Text, { value: value('keepArchivedEntries'), type: 'number', onChange: (v) => set('keepArchivedEntries', v) })),
+            h(Field, { key: 'interval', label: '自动整理间隔（小时）' }, h(Text, { value: value('janitorIntervalHours'), type: 'number', onChange: (v) => set('janitorIntervalHours', v) })),
+          ]),
+          h('div', { key: 'options', style: GRID }, [
+            h(Field, { key: 'scope', label: '整理范围' }, h(Select, {
+              value: value('janitorScope') || 'all',
+              options: [['all', '全局 + 全部项目'], ['project', '只看项目'], ['global', '只看全局']],
+              onChange: (v) => set('janitorScope', v),
+            })),
+            h(Field, { key: 'protect', label: '保护关键词（逗号分隔）' }, h(Text, { value: value('janitorProtectKeywords'), onChange: (v) => set('janitorProtectKeywords', v) })),
+          ]),
+          h('div', { key: 'janitorstate', style: { ...MUTED, marginTop: 8 } }, [
+            h('div', { key: 'a' }, `上次整理：${janitorInfo.lastRunAt ? clock(janitorInfo.lastRunAt) : '还没跑过'}${janitorInfo.nextDueAt ? ` · 下次 ${clock(janitorInfo.nextDueAt)}` : ''}`),
+            janitorInfo.lastResult
+              ? h('div', { key: 'b' }, `上次结果：归档 ${janitorInfo.lastResult.archived || 0} 条、删除 ${janitorInfo.lastResult.purged || 0} 条、跳过 ${janitorInfo.lastResult.skipped || 0} 条`)
+              : null,
+          ]),
+          h('div', { key: 'actions', style: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 } }, [
+            h('button', { key: 'preview', style: BUTTON, disabled: Boolean(busy), onClick: () => void runJanitorJob(true) }, busy === 'janitor-preview' ? '预览中…' : '预览会怎么整理'),
+            h('button', { key: 'run', style: PRIMARY, disabled: Boolean(busy), onClick: () => void runJanitorJob(false) }, busy === 'janitor-run' ? '整理中…' : '现在整理'),
+          ]),
+          h('div', { key: 'tip', style: { ...MUTED, marginTop: 8 } }, '先点下方「保存设置」让参数生效，再点整理。手动整理只走设置页接口，不新增 agent 工具。'),
         ]),
 
         h(Card, { key: 'offline', title: '离线快照（完全不用网络）' }, [

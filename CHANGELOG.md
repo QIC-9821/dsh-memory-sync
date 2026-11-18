@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-18
+
+### Added
+
+- Memory janitor in the settings page ("记忆归档与清理"): moves entries older
+  than `archiveAfterDays` from `MEMORY.md` / `USER.md` / `KEY.md` into
+  `*-archive.md`, then deletes archived entries older than `purgeAfterDays` (or
+  beyond `keepArchivedEntries`, keeping the newest by date). Manual preview and
+  run buttons go through `POST /memory-sync/api/janitor/run`; no agent tool is
+  added, so the prompt and tool table do not grow.
+- `janitorEnabled` (`true`), `janitorIntervalHours` (`24`), `archiveAfterDays`
+  (`7`), `purgeAfterDays` (`90`), `keepArchivedEntries` (`300`),
+  `janitorProtectKeywords`, `janitorScope` (`project`) and `janitorSyncAfter`
+  in the desktop settings page and the Android `Config` form.
+- Protection keywords skip entries containing them; every write is backed up as
+  `<file>.bak-janitor-<timestamp>` first; a dry run only reports what would move.
+- After a non-dry run that archived or purged entries, the plugin pushes one
+  snapshot (HTTP transport) so a tablet holding older files cannot write the
+  removed entries back.
+- The janitor state (`lastRunAt`, the last result counts, `nextDueAt`) is
+  restored after a plugin reload and exposed in the settings state.
+
+### Changed
+
+- `janitorScope` defaults to `project`, so global `MEMORY.md` / `USER.md` are
+  left untouched unless the user selects `all` or `global`.
+
 ## [0.4.0] - 2026-11-18
 
 ### Added

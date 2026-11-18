@@ -9,6 +9,7 @@ import { createToolController } from './lib/tools.mjs'
 import { createSecretStore } from './lib/secret.mjs'
 import { createPairingStore } from './lib/pairing.mjs'
 import { createRemoteController } from './lib/remote.mjs'
+import { createJanitor } from './lib/janitor.mjs'
 import { cleanupData, profileStillHasPlugin } from './lib/cleanup.mjs'
 
 export const name = 'dsh-memory-sync'
@@ -103,6 +104,14 @@ export const Config = z
         tunnelRemotePort: field(z.natural().default(18792).description('SSH 隧道：跳板机上监听的端口')),
         tunnelLocalPort: field(z.natural().default(0).description('SSH 隧道：本机目标端口；0=用 listenPort')),
         purgeOnUninstall: field(z.boolean().default(false).description('卸载时尝试删除本机数据（实验性；DSH 没有公开卸载钩子）')),
+        janitorEnabled: field(z.boolean().default(true).description('定期整理记忆：把旧条目归档、删掉过期归档')),
+        janitorIntervalHours: field(z.natural().default(24).description('自动整理间隔（小时）；0=只手动')),
+        archiveAfterDays: field(z.natural().default(7).description('主记忆里超过 N 天的条目移到 *-archive.md')),
+        purgeAfterDays: field(z.natural().default(90).description('归档里超过 N 天的条目删除；0=不按天数删')),
+        keepArchivedEntries: field(z.natural().default(300).description('归档最多保留多少条；0=不限')),
+        janitorProtectKeywords: field(z.string().default('勿删,待确认,勿动,不要归档,不要删除').description('包含这些词的条目永远不归档/删除')),
+        janitorScope: field(z.string().default('project').description('整理范围：all=全局+项目；project=只看项目；global=只看全局')),
+        janitorSyncAfter: field(z.boolean().default(true).description('整理后自动推送一次快照，避免平板把旧条目带回')),
       })
       .description(SHORT_MANUAL)
   : undefined
@@ -154,6 +163,19 @@ export async function apply(ctx, config = {}) {
     getConfig: getRuntimeConfig,
     logger,
   })
+  const janitor = createJanitor({
+    getConfig: getRuntimeConfig,
+    stateDir: () => store.current().stateDir,
+    logger,
+    onCompleted: async (result) => {
+      const effective = getRuntimeConfig()
+      if (result.dryRun || !result.ok || !(result.archived || result.purged)) return
+      if (!effective.janitorSyncAfter || effective.transport !== 'http' || !effective.peerUrl) return
+      await runtime.run('janitor', { direction: 'push' }).catch((error) => {
+        logger.warn(`janitor post-sync failed: ${error?.message || error}`)
+      })
+    },
+  })
 
   async function applyConfig() {
     secrets.resumeGeneration?.()
@@ -163,6 +185,7 @@ export async function apply(ctx, config = {}) {
     const localPort = applied?.server?.port || effective.tunnelLocalPort || effective.listenPort
     await remote.reconfigure(effective, { localPort })
     tools.refresh()
+    janitor.reconfigure()
     return applied
   }
 
@@ -181,6 +204,7 @@ export async function apply(ctx, config = {}) {
         secrets,
         pairing,
         remote,
+        janitor,
         cleanup: cleanupData,
         onConfigApplied: applyConfig,
       })
@@ -213,6 +237,7 @@ export async function apply(ctx, config = {}) {
 
   const dispose = async () => {
     remote.dispose()
+    janitor.dispose()
     tools.dispose()
     runtime.dispose()
     try {
