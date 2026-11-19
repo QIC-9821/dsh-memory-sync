@@ -116,6 +116,9 @@ async function main() {
     `        replyOnReceive: ${Boolean(config.replyOnReceive)}`,
     `        keepSnapshots: ${Number(config.keepSnapshots) || 5}`,
     `        maxSnapshotMB: ${Number(config.maxSnapshotMB) || 100}`,
+    ...(config.listenHost ? [`        listenHost: ${q(config.listenHost)}`] : []),
+    ...(config.listenPort ? [`        listenPort: ${Number(config.listenPort)}`] : []),
+    `        rememberPeer: ${Boolean(config.rememberPeer)}`,
     `        enabled: ${Boolean(config.enabled !== false)}`,
     '',
   ].join('\n')

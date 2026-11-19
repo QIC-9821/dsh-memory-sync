@@ -85,3 +85,79 @@ test('latest returns 404 when the hub has no memories yet', async () => {
     await hub.close()
   }
 })
+
+test('peer memory records authenticated callers only and serves the hub view', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'memsync-pc-'))
+  await writeTree(root, { 'USER.md': 'pc user' })
+  const stateDir = mkdtempSync(join(tmpdir(), 'memsync-hub-'))
+  const seen = []
+  const records = { hotspot: { host: '192.168.137.50', at: '2026-11-19T00:00:00.000Z', count: 2 } }
+  const peers = {
+    record: (host) => seen.push(host),
+    list: () => ({ rememberPeer: true, machine: 'pc', listenPort: 18792, records }),
+    remove: (mode) => {
+      const found = Boolean(records[mode])
+      delete records[mode]
+      return found
+    },
+    use: async (mode) => (records[mode]
+      ? { ok: true, mode, peerUrl: `http://${records[mode].host}:18792`, host: records[mode].host }
+      : { ok: false, error: `no remembered ${mode} address` }),
+  }
+  const hub = createSnapshotServer({
+    dir: join(stateDir, 'snapshots'),
+    secret: 's3cret',
+    machine: 'pc',
+    repoRoot: root,
+    listenHost: '127.0.0.1',
+    listenPort: 0,
+    peers,
+    logger: null,
+  })
+  const addr = await hub.listen()
+  const url = `http://127.0.0.1:${addr.port}`
+  try {
+    // /mem/ping is unauthenticated: it must not be remembered.
+    const ping = await callPeer(url, '/mem/ping')
+    assert.equal((await ping.json()).ok, true)
+    assert.equal(seen.length, 0)
+
+    // An authenticated call is what carries a usable address.
+    const list = await callPeer(url, '/mem/list', { secret: 's3cret' })
+    assert.equal((await list.json()).ok, true)
+    assert.deepEqual(seen, ['127.0.0.1'])
+
+    const view = await callPeer(url, '/mem/peers', { secret: 's3cret' })
+    const doc = await view.json()
+    assert.equal(doc.ok, true)
+    assert.equal(doc.rememberPeer, true)
+    assert.equal(doc.records.hotspot.host, '192.168.137.50')
+
+    const used = await callPeer(url, '/mem/peers/use', {
+      method: 'POST',
+      secret: 's3cret',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'hotspot' }),
+    })
+    const usedDoc = await used.json()
+    assert.equal(usedDoc.ok, true)
+    assert.equal(usedDoc.peerUrl, 'http://192.168.137.50:18792')
+
+    const removed = await callPeer(url, '/mem/peers/delete', {
+      method: 'POST',
+      secret: 's3cret',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'hotspot' }),
+    })
+    const removedDoc = await removed.json()
+    assert.equal(removedDoc.ok, true)
+    assert.equal(removedDoc.removed, true)
+
+    await assert.rejects(
+      () => callPeer(url, '/mem/peers', { secret: 'nope' }),
+      /401/,
+    )
+  } finally {
+    await hub.close()
+  }
+})

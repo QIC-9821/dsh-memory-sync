@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-19
+
+### Added
+
+- Peer address memory for server-mode nodes: `rememberPeer` (default `false`)
+  makes the snapshot hub record the address of every authenticated caller, one
+  address per network kind (热点 `192.168.137.x` / `192.168.43.x` /
+  `172.20.10.x`, 局域网 RFC1918, Tailscale `100.64.0.0/10`, 其他). Records live in
+  `<stateDir>/peers.json` (atomic write, throttled to one write per address per
+  10 minutes) and are never sent to a model, so the switch costs no tokens.
+- Peer endpoints on the hub: `GET /mem/peers`, `POST /mem/peers/delete`,
+  `POST /mem/peers/use` (the last one points this node at a remembered address
+  and reconfigures the sync runtime). Local proxy routes:
+  `GET /memory-sync/api/peers?remote=1`, `POST /memory-sync/api/peers/delete`,
+  `POST /memory-sync/api/peers/use`; an unreachable peer answers
+  `{ ok:false, error:"peer unreachable" }`.
+- `connectionMode` (`usb` / `hotspot` / `lan` / `tailnet` / `ssh` / empty =
+  derive from `peerUrl`) and `peerHistory` (at most two addresses per network
+  kind, newest first) so the settings page can show quick-switch address chips.
+
 ## [0.5.0] - 2026-11-18
 
 ### Added

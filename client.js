@@ -200,6 +200,10 @@ window.__ModuleLoader__.load({
       const [pairUrl, setPairUrl] = useState('')
       const [pairInput, setPairInput] = useState('')
       const [includeBackups, setIncludeBackups] = useState(false)
+      const [tab, setTab] = useState('overview')
+      const [peersView, setPeersView] = useState(null)
+      const [peersError, setPeersError] = useState('')
+      const [peerBusy, setPeerBusy] = useState('')
 
       const load = useCallback(async () => {
         try {
@@ -216,6 +220,39 @@ window.__ModuleLoader__.load({
         const timer = setInterval(() => void load(), 8000)
         return () => clearInterval(timer)
       }, [load])
+
+      const loadPeers = useCallback(async () => {
+        try {
+          const next = await api('peers?remote=1')
+          setPeersView(next)
+          setPeersError('')
+        } catch (err) {
+          setPeersError(String(err?.message || err))
+        }
+      }, [])
+
+      // The address book is read on demand: asking the peer costs a network
+      // round trip, so it must not ride the eight-second status poll.
+      useEffect(() => {
+        if (tab === 'ext') void loadPeers()
+      }, [tab, loadPeers])
+
+      async function peerAction(kind, mode, remote) {
+        setPeerBusy(`${kind}-${mode}-${remote ? 'r' : 'l'}`)
+        setError('')
+        setNote('')
+        try {
+          await post(`peers/${kind}`, { mode, remote })
+          await loadPeers()
+          setNote(kind === 'use'
+            ? `已把对端地址切到记住的 ${mode} 地址。`
+            : `已删除记住的 ${mode} 地址。`)
+        } catch (err) {
+          setError(String(err?.message || err))
+        } finally {
+          setPeerBusy('')
+        }
+      }
 
       const config = data?.config || {}
       const status = data?.status || {}
@@ -457,7 +494,72 @@ window.__ModuleLoader__.load({
 
       const interval = Number(value('intervalSendMinutes') || 0)
 
-      return h('div', { style: { maxWidth: 860, margin: '0 auto', padding: '4px 0 24px' } }, [
+      const connectionLabel = (() => {
+        const url = String(status.peerUrl || '')
+        if (!url) return '未连接'
+        let host = ''
+        try {
+          host = new URL(url).hostname.toLowerCase()
+        } catch {
+          return '自定义地址'
+        }
+        if (host.endsWith('.ts.net')) return 'Tailscale 异地'
+        if (/^192\.168\.(137|43)\./.test(host) || /^172\.20\.10\./.test(host)) return '热点直连'
+        if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return '局域网直连'
+        return '自定义地址'
+      })()
+
+      const MODE_LABELS = { hotspot: '热点', lan: '局域网', tailnet: 'Tailscale', other: '其他' }
+
+      const peerGroup = (title, view, remote) => {
+        const records = view?.records || {}
+        const modes = ['hotspot', 'lan', 'tailnet', 'other']
+        return h('div', { key: `peer-${title}`, style: { marginTop: 12 } }, [
+          h('div', { key: 'h', style: { fontWeight: 600, fontSize: 13, marginBottom: 4 } }, `${title}${view?.machine ? ` · ${view.machine}` : ''}`),
+          ...modes.map((mode) => {
+            const record = records[mode]
+            const busyKey = `delete-${mode}-${remote ? 'r' : 'l'}`
+            return h('div', { key: mode, style: { display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 12.5 } }, [
+              h('span', { key: 'k', style: { width: 76, opacity: 0.7 } }, MODE_LABELS[mode]),
+              h('span', { key: 'v', style: { flex: 1, wordBreak: 'break-all' } }, record ? record.host : '—'),
+              record
+                ? h('button', {
+                    key: 'd',
+                    style: { ...BUTTON, padding: '2px 8px', fontSize: 11.5 },
+                    disabled: Boolean(peerBusy),
+                    onClick: () => void peerAction('delete', mode, remote),
+                  }, peerBusy === busyKey ? '删除中…' : '删除')
+                : null,
+            ])
+          }),
+          remote
+            ? h('div', { key: 'use', style: { marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' } }, [
+                ...modes
+                  .filter((mode) => records[mode])
+                  .map((mode) => h('button', {
+                    key: mode,
+                    style: { ...BUTTON, padding: '3px 10px', fontSize: 12 },
+                    disabled: Boolean(peerBusy),
+                    onClick: () => void peerAction('use', mode, true),
+                  }, `用 ${MODE_LABELS[mode]} 地址连它`)),
+              ])
+            : null,
+        ])
+      }
+
+      const tabButton = (id, label) => h('button', {
+        key: `tab-${id}`,
+        style: {
+          ...BUTTON,
+          padding: '5px 12px',
+          border: `1px solid ${tab === id ? 'var(--dsh-accent, #3b82f6)' : 'transparent'}`,
+          background: tab === id ? 'rgba(59,130,246,.12)' : 'transparent',
+          color: 'inherit',
+        },
+        onClick: () => setTab(id),
+      }, label)
+
+      const nodes = [
         h('div', { key: 'head', style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 } }, [
           h('h2', { key: 'title', style: { margin: 0, fontSize: 18 } }, '记忆同步'),
           h('span', { key: 'ver', style: MUTED }, `v${data.version || '?'} · ${status.machine || '?'}`),
@@ -466,9 +568,28 @@ window.__ModuleLoader__.load({
         error ? h('div', { key: 'err', style: { padding: '9px 12px', marginBottom: 12, borderRadius: 8, background: 'rgba(239,68,68,.12)', color: '#ef4444', fontSize: 13 } }, error) : null,
         note ? h('div', { key: 'note', style: { padding: '9px 12px', marginBottom: 12, borderRadius: 8, background: 'rgba(34,197,94,.12)', color: '#16a34a', fontSize: 13 } }, note) : null,
 
+        h('div', {
+          key: 'tabs',
+          style: {
+            display: 'flex',
+            gap: 6,
+            marginBottom: 14,
+            paddingBottom: 8,
+            borderBottom: '1px solid var(--dsh-border, rgba(127,127,127,.2))',
+            flexWrap: 'wrap',
+          },
+        }, [
+          tabButton('overview', '总览'),
+          tabButton('sync', '同步方式'),
+          tabButton('archive', '归档与删档'),
+          tabButton('secret', '密钥与配对'),
+          tabButton('ext', '扩展'),
+        ]),
+
         h(Card, { key: 'status', title: '状态' }, [
           h('div', { key: 'rows' }, [
             h('div', { key: 'a', style: ROW }, [h('span', { key: 'k' }, '传输'), h('b', { key: 'v' }, value('transport') === 'http' ? 'HTTP 快照' : 'SSH 三段式')]),
+            h('div', { key: 'conn', style: ROW }, [h('span', { key: 'k' }, '连接方式'), h('b', { key: 'v' }, connectionLabel)]),
             h('div', { key: 'b', style: ROW }, [h('span', { key: 'k' }, '角色'), h('b', { key: 'v' }, { client: '客户端', server: '服务端', both: '双向节点', ssh: 'SSH' }[role] || role)]),
             h('div', { key: 'c', style: ROW }, [h('span', { key: 'k' }, '对端'), h('span', { key: 'v' }, status.peerUrl || status.peerHost || '未配置')]),
             h('div', { key: 'd', style: ROW }, [h('span', { key: 'k' }, '快照服务'), h('span', { key: 'v' }, status.server?.error ? `错误：${status.server.error}` : status.server ? `${status.server.host}:${status.server.port}` : '未启动')]),
@@ -488,6 +609,21 @@ window.__ModuleLoader__.load({
             ...(result.phases || []).map((phase, index) => h('div', { key: index }, phaseLine(phase))),
             result.error ? h('div', { key: 'e', style: { color: '#ef4444' } }, result.error) : null,
           ]) : null,
+        ]),
+
+        h(Card, { key: 'remember', title: '记住来访地址' }, [
+          h(Toggle, {
+            key: 'on',
+            label: '当纯服务端时，记住谁连过我',
+            desc: '打开后，PC 每次连上来都会把它的地址记在本机，每种方式只留最后 1 个；要修电脑时从这里挑一个地址回连，不用再问 IP。关掉就只是普通服务端，什么都不记。',
+            checked: Boolean(value('rememberPeer')),
+            onChange: (v) => set('rememberPeer', v),
+            dirty: dirtyOf('rememberPeer'),
+          }),
+          h('div', { key: 'hint', style: { ...MUTED, marginTop: 6 } },
+            Boolean(value('rememberPeer'))
+              ? '开着：看看「扩展」里记住了哪些地址，保存后生效。'
+              : '关着：本机不记录任何来访地址。'),
         ]),
 
         h(Card, { key: 'tools', title: '工具（省 token）' }, [
@@ -744,6 +880,18 @@ window.__ModuleLoader__.load({
             ])
           : null,
 
+        h(Card, { key: 'peers', title: '记住的地址' }, [
+          h('div', { key: 'hint', style: MUTED }, '本机在「记住来访地址」打开时会记下每个连过它的地址；对端那份要连得上才能读到。每种方式只留最后 1 个，可以在下面删除，或者让对端改用其中某个地址。'),
+          peerGroup('本机记录', peersView?.local, false),
+          peersView?.remote === null
+            ? h('div', { key: 'nopeer', style: { ...MUTED, marginTop: 12 } }, '对端未配置地址，读不到它的记录。')
+            : peerGroup('对端记录', peersView?.remote, true),
+          peersError ? h('div', { key: 'err', style: { marginTop: 10, color: '#ef4444', fontSize: 12.5 } }, peersError) : null,
+          h('div', { key: 'row', style: { marginTop: 10 } }, [
+            h('button', { key: 'r', style: BUTTON, disabled: Boolean(peerBusy), onClick: () => void loadPeers() }, peerBusy ? '读取中…' : '刷新地址簿'),
+          ]),
+        ]),
+
         h(Card, { key: 'logs', title: '日志' }, [
           h('div', { key: 'row', style: { display: 'flex', gap: 8, flexWrap: 'wrap' } }, [
             h('button', { key: 'l', style: BUTTON, disabled: Boolean(busy), onClick: () => void loadLogs() }, busy === 'logs' ? '读取中…' : '刷新日志'),
@@ -790,7 +938,37 @@ window.__ModuleLoader__.load({
           h('span', { key: 'hint', style: MUTED }, dirty.length === 0 && !clearSecret ? `已保存 · ${clock(data.settings?.updatedAt)} · ${data.settings?.path || ''}` : `${dirty.length} 项待保存${clearSecret ? '（将清除密钥）' : ''}`),
           h('button', { key: 'clear', style: BUTTON, disabled: Boolean(busy), onClick: () => { setClearSecret(true); setNote('保存后会清除共享密钥；也可以直接填写新密钥。') } }, '清除密钥'),
         ]),
-      ])
+      ]
+
+      const TAB_OF_KEY = {
+        status: 'overview',
+        remember: 'overview',
+        tools: 'overview',
+        manual: 'overview',
+        transport: 'sync',
+        remote: 'sync',
+        http: 'sync',
+        ssh: 'sync',
+        offline: 'sync',
+        secret: 'secret',
+        janitor: 'archive',
+        rules: 'archive',
+        peers: 'ext',
+        logs: 'ext',
+        advanced: 'ext',
+      }
+      const TAB_ORDER = { offline: 0 }
+      const visible = nodes
+        .filter((node) => {
+          const where = TAB_OF_KEY[node?.key]
+          return !where || where === tab
+        })
+        .map((node, index) => ({ node, index }))
+        // The USB snapshot card is the first thing under 同步方式: it works with
+        // no network at all, so it should not sit below the online methods.
+        .sort((a, b) => (TAB_ORDER[a.node?.key] ?? 10) - (TAB_ORDER[b.node?.key] ?? 10) || a.index - b.index)
+        .map((entry) => entry.node)
+      return h('div', { style: { maxWidth: 860, margin: '0 auto', padding: '4px 0 24px' } }, visible)
     }
 
     return {

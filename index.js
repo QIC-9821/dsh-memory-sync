@@ -10,6 +10,7 @@ import { createSecretStore } from './lib/secret.mjs'
 import { createPairingStore } from './lib/pairing.mjs'
 import { createRemoteController } from './lib/remote.mjs'
 import { createJanitor } from './lib/janitor.mjs'
+import { createPeerDirectory } from './lib/peer-directory.mjs'
 import { cleanupData, profileStillHasPlugin } from './lib/cleanup.mjs'
 
 export const name = 'dsh-memory-sync'
@@ -112,6 +113,8 @@ export const Config = z
         janitorProtectKeywords: field(z.string().default('勿删,待确认,勿动,不要归档,不要删除').description('包含这些词的条目永远不归档/删除')),
         janitorScope: field(z.string().default('project').description('整理范围：all=全局+项目；project=只看项目；global=只看全局')),
         janitorSyncAfter: field(z.boolean().default(true).description('整理后自动推送一次快照，避免平板把旧条目带回')),
+        rememberPeer: field(z.boolean().default(false).description('纯服务端模式：记下每个连过来的客户地址（每种网络只留 1 个，可在「扩展」里查看/删除）')),
+        connectionMode: field(z.string().default('').description('当前连接方式（usb/hotspot/lan/tailnet/ssh），留空=按地址自动判断')),
       })
       .description(SHORT_MANUAL)
   : undefined
@@ -141,6 +144,14 @@ export async function apply(ctx, config = {}) {
   })
   const pairing = createPairingStore({ stateDir: cfg.stateDir, logger })
   const remote = createRemoteController({ logger, stateDir: store.current().stateDir })
+  const peers = createPeerDirectory({
+    getConfig: () => store.current(),
+    applyPatch: async (patch) => {
+      store.save(patch)
+      await applyConfig(patch)
+    },
+    logger,
+  })
 
   const getRuntimeConfig = () => {
     const base = store.current()
@@ -156,6 +167,7 @@ export async function apply(ctx, config = {}) {
     getConfig: getRuntimeConfig,
     logger,
     pairing,
+    peers,
   })
   const tools = createToolController({
     ctx,
@@ -205,6 +217,7 @@ export async function apply(ctx, config = {}) {
         pairing,
         remote,
         janitor,
+        peers,
         cleanup: cleanupData,
         onConfigApplied: applyConfig,
       })

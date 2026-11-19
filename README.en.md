@@ -20,11 +20,11 @@ dsh plugin add dsh-memory-sync
 
 Local development: `"dsh-memory-sync": "link:D:/dsh-plugins/dsh-memory-sync"`.
 
-Android: the current built zip is `dist/dsh-memory-sync-0.3.0-tablet.zip` (root `package.json`, no BOM, schemastery bundled into `dist/index.js`). The 0.4.0 code has not been re-packed yet; run `scripts/build-tablet.mjs` when needed.
+Android: build the self-contained zip with `scripts/build-tablet.mjs` (esbuild bundles schemastery into `dist/index.js`, output `dsh-memory-sync-<version>-tablet.zip`; 0.6.0 packages are built on demand and zips are not committed).
 
 ## Settings
 
-- Desktop: Settings → Memory Sync — test, sync both/push/pull, the token-saving tool card (`toolsMode` / `toolsScope`), secrets and pairing, remote access, rules, offline snapshots, logs, restore.
+- Desktop: Settings → Memory Sync — five tabs (Overview / Sync / Archive & prune / Secrets & pairing / Advanced). The overview holds status with the live connection mode, test and sync both/push/pull; sync holds offline snapshots (USB, on top), direct peer sync, the SSH chain and logs; archive holds the memory janitor and local-data cleanup; secrets holds key source, fingerprint, migration and pairing; advanced holds remembered addresses (local + peer), custom rules, snapshot list/restore and remote access.
 - Android: Settings → Extensions → Installed plugins → dsh-memory-sync — schema form with the same fields; use the `memory_sync` tool for manual runs.
 
 Overrides live in `~/.dsh/memory-sync/settings.json` and take precedence over the profile's `cordis.patch.yml`.

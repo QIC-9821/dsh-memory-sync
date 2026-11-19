@@ -31,21 +31,26 @@ dsh plugin add dsh-memory-sync
 "dsh-memory-sync": "link:D:/dsh-plugins/dsh-memory-sync"
 ```
 
-平板装自包含 zip（`dist/dsh-memory-sync-0.3.0-tablet.zip` 是当前已构建的版本；0.4.0 代码尚未重新打包，需要时跑 `scripts/build-tablet.mjs`）。
+平板装自包含 zip：跑 `scripts/build-tablet.mjs` 生成（esbuild 把 schemastery 打进 `dist/index.js`，产物是 `dsh-memory-sync-<版本>-tablet.zip`；0.6.0 的包按需构建，仓库里不提交 zip）。
 
 ## 设置页
 
 ### 电脑：设置 → 记忆同步
 
-- 测试连接 / 立即双向同步 / 仅推送 / 仅拉取
-- 工具（省 token）：`auto` / `always` / `off`，以及 `core` / `full` 两档
-- 密钥与配对：来源 / 指纹 / 密钥文件、迁移、生成配对码、用对端地址+码加入
-- 远程访问：Tailscale / SSH 反向隧道，以及隧道状态
-- 双方插件直连、离线快照、SSH 三段式
-- 自定义同步规则
-- 日志、快照列表与恢复
+页面按用途分成五个 Tab：
 
-保存写到 `~/.dsh/memory-sync/settings.json`，优先级高于 profile 的 `cordis.patch.yml`；点「恢复 profile 配置」可清掉本页覆盖。
+| Tab | 内容 |
+| --- | --- |
+| 总览 | 状态（含实时「连接方式」）、测试连接、立即双向同步 / 仅推送 / 仅拉取、工具与 token 开关 |
+| 同步方式 | 离线快照（U 盘，排在最上）、双方插件直连、SSH 三段式、日志 |
+| 归档与删档 | 记忆归档与清理（janitor）、删除本机数据 |
+| 密钥与配对 | 密钥来源 / 指纹 / 密钥文件、迁移、配对码 |
+| 扩展 | 记住的地址（本机 + 对端）、自定义同步规则、快照列表与恢复、远程访问 |
+
+- 「保存并应用」常驻底部，改动保存到 `~/.dsh/memory-sync/settings.json`，优先级高于 profile 的 `cordis.patch.yml`；「恢复 profile 配置」清掉本页覆盖。
+- 状态卡里的「连接方式」由对端地址实时推断：未连接 / 热点直连 / 局域网直连 / Tailscale 异地 / 自定义地址。
+- 「记住来访地址」打开后（纯服务端常用），任何通过密钥校验的对端连上来，本机就把它按方式分类（热点 / 局域网 / Tailscale / 其他）记进 `<stateDir>/peers.json`，每种只留最后 1 个，10 分钟内不重复写。地址在「扩展」页预览、删除，点「用 XX 地址连它」直接把 peerUrl 换成它并重载。配置里存的是 `rememberPeer` 与 `peerHistory`，不调模型、不占 token。
+- 「连接方式」卡还会把 `peerHistory` 里每种方式最近 2 个地址显示成快捷按钮。
 
 ### 平板：设置 → 扩展 → 已安装插件 → dsh-memory-sync
 
@@ -54,6 +59,18 @@ dsh plugin add dsh-memory-sync
 ```json
 {"action":"run","direction":"both"}
 ```
+
+把平板当纯服务端跑（只收不算）时：`peerUrl` 留空、`intervalSendMinutes: 0`、`runOnStartup: false`、`replyOnReceive: false`、`serve: true`、`listenHost: 0.0.0.0`、`rememberPeer: true`。
+
+### 记住来访地址的 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/mem/peers` | 本机记住的地址（需 `x-mem-secret`） |
+| POST | `/mem/peers/delete` | `{mode}` 删掉某一类 |
+| POST | `/mem/peers/use` | `{mode}` 把 peerUrl 切到该地址并重载 |
+
+本机设置页走代理：`GET /memory-sync/api/peers?remote=1` 会同时问对端要一份，返回 `{local, remote}`。
 
 ## 自定义同步规则
 
@@ -94,6 +111,9 @@ dsh plugin add dsh-memory-sync
 | `tunnelEnabled` / `sshHost` / `sshUser` / `sshKeyPath` | `false` / 空 | SSH 反向隧道开关与跳板机 |
 | `tunnelRemotePort` / `tunnelLocalPort` | `18792` / `0` | 跳板机监听端口 / 本机目标端口（0=listenPort） |
 | `purgeOnUninstall` | `false` | 实验性：卸载且 profile 已无本插件时清本机数据 |
+| `rememberPeer` | `false` | 记住谁连过本机（纯服务端常用）；只在该端作为服务端收到鉴权请求时写 `peers.json` |
+| `connectionMode` | 空 | 最近一次「用记住的地址连它」选的方式：`off` / `usb` / `hotspot` / `lan` / `tailnet` / `ssh` |
+| `peerHistory` | `{}` | 每种连接方式最近 2 个对端地址，由 `peerUrl` 变化自动累加，设置页显示成快捷按钮 |
 
 状态、日志、设置、快照都在 `$DSH_HOME/memory-sync/`：`last-run.json`、`sync.log`、`settings.json`、`secret`、`pairings.json`、`snapshots/`、`exports/`。
 

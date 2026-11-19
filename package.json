@@ -1,6 +1,6 @@
 {
   "name": "dsh-memory-sync",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Keep a memory folder in sync across two machines: LAN HTTP snapshots, offline snapshot files, or an SSH peer chain. Includes a desktop settings page and an Android config form.",
   "type": "module",
   "license": "MIT",

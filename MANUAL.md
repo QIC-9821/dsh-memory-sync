@@ -38,6 +38,16 @@
 
 保存写到 `~/.dsh/memory-sync/settings.json`，优先级高于 profile 里的 `cordis.patch.yml`；点「恢复 profile 配置」可清掉本页覆盖。
 
+## 把平板当纯服务端
+
+平板只存不推、等电脑来连时：
+
+1. 电脑设置页 → 记忆同步 → 「同步方式」里的「双方插件直连」，对端地址填平板地址（如 `http://192.168.137.50:18792`），密钥一致。
+2. 平板那侧：`peerUrl` 留空、`intervalSendMinutes: 0`、`runOnStartup: false`、`replyOnReceive: false`、`serve: true`、`listenHost: 0.0.0.0`、`rememberPeer: true`。
+3. 之后每次电脑连上来，平板会把它记进「记住的地址」（每种方式只留最后一个）。要反过来修电脑时，在平板设置页「扩展」→「记住的地址」里点「用 XX 地址连它」，或让 agent 跑 `memory_sync {"action":"import"}` 那套 HTTP 工具。
+
+想彻底不记：把「记住来访地址」关上，平板就只是普通服务端，不写 `peers.json`。
+
 ## 省 token：工具开关
 
 `memory_sync` 默认 `toolsMode=auto`：没配记忆目录时不注册；上次同步成功后隐藏（agent 的工具表里看不到，每步最多省约 450 tokens；core 档约 145 tokens）；上次失败/还没同步过/正在同步，或在设置页点了「唤醒 agent 工具 10 分钟」时，它会重新出现。
